@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 320px; padding: 16px; font-family: system-ui, sans-serif; background: #f8fafc; margin: 0; }
+    h2 { color: #1e293b; margin-top: 0; text-align: center; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; }
+    .tagline { text-align: center; font-size: 12px; color: #64748b; margin-bottom: 16px; }
+    .drop-zone { border: 2px dashed #94a3b8; border-radius: 8px; padding: 20px; text-align: center; color: #475569; font-size: 14px; background: white; cursor: pointer; }
+    .drop-zone:hover { border-color: #3b82f6; background: #f1f5f9; }
+    select { width: 100%; padding: 8px; margin-top: 10px; border-radius: 6px; border: 1px solid #cbd5e1; background: white; }
+    .btn-convert { width: 100%; background: #3b82f6; color: white; border: none; padding: 10px; border-radius: 6px; font-weight: bold; margin-top: 12px; cursor: pointer; }
+    .btn-convert:hover { background: #2563eb; }
+    .btn-convert:disabled { background: #94a3b8; cursor: not-allowed; }
+    .footer { font-size: 10px; text-align: center; color: #94a3b8; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h2>⚡ FileFlick</h2>
+  <div class="tagline">Instant · Private · Free</div>
+  <div class="drop-zone" id="dropZone">
+    📁 Drop file here<br><small>(or click to upload)</small>
+    <input type="file" id="fileInput" style="display: none;" accept="image/*">
+  </div>
+  <select id="formatSelect">
+    <option value="png">PNG</option>
+    <option value="jpeg">JPG</option>
+    <option value="webp">WebP</option>
+    <option value="bmp">BMP</option>
+  </select>
+  <button class="btn-convert" id="convertBtn">🚀 Convert & Download</button>
+  <div class="footer">No uploads to servers. 100% local.</div>
+  <script src="popup.js"></script>
+</body>
+</html>
