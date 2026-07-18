@@ -1,10 +1,14 @@
 /**
- * FileFlick Core Engine
- * Supports: Images (Canvas) + Documents (DOCX → PDF)
+ * FileFlick Core Engine - Full Multi-Format Converter
+ * Supports: Images + DOCX↔PDF + PDF→DOCX/XLSX/PPTX/TXT/HTML
  * 100% Local - No data ever leaves the browser.
  */
 import mammoth from 'mammoth';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import pdfParse from 'pdf-parse';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import * as XLSX from 'xlsx';
+import PptxGenJS from 'pptxgenjs';
 
 // ---------- IMAGE CONVERTER ----------
 export const convertImage = (file, targetFormat) => {
@@ -40,21 +44,17 @@ export const convertImage = (file, targetFormat) => {
   });
 };
 
-// ---------- DOCX TO PDF CONVERTER (FIXED) ----------
+// ---------- DOCX TO PDF (Existing - Fixed) ----------
 export const convertDocxToPdf = (file) => {
   return new Promise((resolve, reject) => {
-    // 1. Check if it's a Word file
     if (!file.name.endsWith('.docx') && !file.type.includes('word')) {
       return reject(new Error('Please upload a valid .docx file.'));
     }
 
-    // 2. Read the file as an ArrayBuffer (binary data)
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const arrayBuffer = event.target.result;
-
-        // 3. Extract text from DOCX using Mammoth
         const result = await mammoth.extractRawText({ arrayBuffer });
         const text = result.value;
 
@@ -62,86 +62,46 @@ export const convertDocxToPdf = (file) => {
           return reject(new Error('No text found in the Word document.'));
         }
 
-        // 4. Create a new PDF using pdf-lib
         const pdfDoc = await PDFDocument.create();
         const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
         const fontSize = 12;
         const margin = 50;
-        
-        // 5. Split text into lines (handles \n, \r\n, and \r)
         const lines = text.split(/\r?\n/);
-        
         let currentPage = pdfDoc.addPage([600, 800]);
         let y = currentPage.getHeight() - margin;
         const maxWidth = currentPage.getWidth() - margin * 2;
 
-        // 6. Draw each line
         for (const rawLine of lines) {
-          // Skip empty lines (just add a blank line)
           if (rawLine.trim() === '') {
             y -= fontSize * 1.5;
             continue;
           }
-
-          // Word wrap for long lines
           const words = rawLine.split(' ');
           let currentLine = '';
-
           for (const word of words) {
             const testLine = currentLine + word + ' ';
             const width = font.widthOfTextAtSize(testLine, fontSize);
-            
             if (width > maxWidth && currentLine.length > 0) {
-              // Draw the current line
-              currentPage.drawText(currentLine.trim(), {
-                x: margin,
-                y: y,
-                size: fontSize,
-                font: font,
-                color: rgb(0, 0, 0),
-              });
+              currentPage.drawText(currentLine.trim(), { x: margin, y: y, size: fontSize, font: font, color: rgb(0, 0, 0) });
               y -= fontSize * 1.5;
               currentLine = word + ' ';
-              
-              // If we run out of space, add a new page
-              if (y < margin) {
-                currentPage = pdfDoc.addPage([600, 800]);
-                y = currentPage.getHeight() - margin;
-              }
+              if (y < margin) { currentPage = pdfDoc.addPage([600, 800]); y = currentPage.getHeight() - margin; }
             } else {
               currentLine = testLine;
             }
           }
-
-          // Draw the last line
           if (currentLine.trim().length > 0) {
-            currentPage.drawText(currentLine.trim(), {
-              x: margin,
-              y: y,
-              size: fontSize,
-              font: font,
-              color: rgb(0, 0, 0),
-            });
+            currentPage.drawText(currentLine.trim(), { x: margin, y: y, size: fontSize, font: font, color: rgb(0, 0, 0) });
             y -= fontSize * 1.5;
           }
-
-          // Add extra space after each paragraph
           y -= fontSize * 0.5;
-
-          // If we run out of space, add a new page
-          if (y < margin) {
-            currentPage = pdfDoc.addPage([600, 800]);
-            y = currentPage.getHeight() - margin;
-          }
+          if (y < margin) { currentPage = pdfDoc.addPage([600, 800]); y = currentPage.getHeight() - margin; }
         }
 
-        // 7. Save the PDF
         const pdfBytes = await pdfDoc.save();
         const blob = new Blob([pdfBytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
-
         resolve({ url, blob, name: 'converted.pdf' });
-
       } catch (error) {
         reject(new Error('Failed to convert DOCX to PDF: ' + error.message));
       }
@@ -149,4 +109,133 @@ export const convertDocxToPdf = (file) => {
     reader.onerror = () => reject(new Error('Failed to read the file.'));
     reader.readAsArrayBuffer(file);
   });
+};
+
+// ---------- HELPER: Extract text from PDF ----------
+const extractTextFromPdf = async (file) => {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfData = await pdfParse(arrayBuffer);
+  return pdfData.text;
+};
+
+// ---------- PDF TO DOCX ----------
+export const convertPdfToDocx = async (file) => {
+  try {
+    const text = await extractTextFromPdf(file);
+    if (!text.trim()) throw new Error('No text found in PDF.');
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: text.split(/\r?\n/).filter(line => line.trim()).map(line => 
+          new Paragraph({
+            children: [new TextRun({ text: line, size: 24 })],
+          })
+        ),
+      }],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const url = URL.createObjectURL(blob);
+    return { url, blob, name: 'converted.docx' };
+  } catch (error) {
+    throw new Error('PDF to DOCX failed: ' + error.message);
+  }
+};
+
+// ---------- PDF TO XLSX (Excel) ----------
+export const convertPdfToXlsx = async (file) => {
+  try {
+    const text = await extractTextFromPdf(file);
+    if (!text.trim()) throw new Error('No text found in PDF.');
+
+    // Split text into rows by newline, then split each row by spaces/tabs
+    const rows = text.split(/\r?\n/).filter(line => line.trim()).map(line => 
+      line.split(/\s{2,}|\t/).map(cell => cell.trim())
+    );
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    return { url, blob, name: 'converted.xlsx' };
+  } catch (error) {
+    throw new Error('PDF to XLSX failed: ' + error.message);
+  }
+};
+
+// ---------- PDF TO PPTX (PowerPoint) ----------
+export const convertPdfToPptx = async (file) => {
+  try {
+    const text = await extractTextFromPdf(file);
+    if (!text.trim()) throw new Error('No text found in PDF.');
+
+    const pptx = new PptxGenJS();
+    const lines = text.split(/\r?\n/).filter(line => line.trim());
+
+    // Create one slide per paragraph, or group text
+    let slide = pptx.addSlide();
+    let slideText = '';
+    let slideCount = 0;
+
+    for (const line of lines) {
+      if (slideText.length + line.length > 800 || slideCount >= 5) {
+        slide.addText(slideText, { x: 1, y: 0.5, w: 8, h: 6, fontSize: 18, color: '000000' });
+        slide = pptx.addSlide();
+        slideText = '';
+        slideCount = 0;
+      }
+      slideText += line + '\n';
+      slideCount++;
+    }
+    if (slideText) {
+      slide.addText(slideText, { x: 1, y: 0.5, w: 8, h: 6, fontSize: 18, color: '000000' });
+    }
+
+    const blob = await pptx.write({ outputType: 'blob' });
+    const url = URL.createObjectURL(blob);
+    return { url, blob, name: 'converted.pptx' };
+  } catch (error) {
+    throw new Error('PDF to PPTX failed: ' + error.message);
+  }
+};
+
+// ---------- PDF TO TXT ----------
+export const convertPdfToTxt = async (file) => {
+  try {
+    const text = await extractTextFromPdf(file);
+    if (!text.trim()) throw new Error('No text found in PDF.');
+    
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    return { url, blob, name: 'converted.txt' };
+  } catch (error) {
+    throw new Error('PDF to TXT failed: ' + error.message);
+  }
+};
+
+// ---------- PDF TO HTML ----------
+export const convertPdfToHtml = async (file) => {
+  try {
+    const text = await extractTextFromPdf(file);
+    if (!text.trim()) throw new Error('No text found in PDF.');
+    
+    // Wrap text in HTML paragraphs
+    const htmlContent = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Converted PDF</title></head>
+<body>
+${text.split(/\r?\n/).filter(line => line.trim()).map(line => `<p>${line}</p>`).join('\n')}
+</body>
+</html>`;
+    
+    const blob = new Blob([htmlContent], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    return { url, blob, name: 'converted.html' };
+  } catch (error) {
+    throw new Error('PDF to HTML failed: ' + error.message);
+  }
 };
