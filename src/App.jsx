@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { convertImage } from './core/converter';
+import { convertImage, convertDocxToPdf } from './core/converter';
 
 function App() {
   const [file, setFile] = useState(null);
+  const [conversionType, setConversionType] = useState('image');
   const [outputFormat, setOutputFormat] = useState('png');
   const [convertedFile, setConvertedFile] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -19,7 +20,12 @@ function App() {
     if (!file) return alert('Please upload a file first.');
     setIsLoading(true);
     try {
-      const result = await convertImage(file, outputFormat);
+      let result;
+      if (conversionType === 'image') {
+        result = await convertImage(file, outputFormat);
+      } else if (conversionType === 'document') {
+        result = await convertDocxToPdf(file);
+      }
       setConvertedFile(result);
     } catch (error) {
       alert('Conversion failed: ' + error.message);
@@ -32,7 +38,7 @@ function App() {
     if (!convertedFile) return;
     const link = document.createElement('a');
     link.href = convertedFile.url;
-    link.download = `converted.${outputFormat}`;
+    link.download = convertedFile.name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -49,10 +55,24 @@ function App() {
           <p className="text-xs text-gray-400 mt-1">No sign-up required. Files never leave your device.</p>
         </div>
 
+        {/* NEW: Conversion Type Selector */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Conversion Type:</label>
+          <select 
+            value={conversionType} 
+            onChange={(e) => setConversionType(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="image">Image Converter (PNG, JPG, WebP, BMP)</option>
+            <option value="document">Document Converter (DOCX → PDF)</option>
+          </select>
+        </div>
+
         <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 hover:border-blue-400 transition-colors">
           <input 
             type="file" 
             onChange={handleFileUpload} 
+            accept={conversionType === 'image' ? 'image/*' : '.docx'}
             className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
           />
           {file && (
@@ -64,17 +84,25 @@ function App() {
 
         <div className="grid grid-cols-2 gap-4 mt-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Convert to:</label>
-            <select 
-              value={outputFormat} 
-              onChange={(e) => setOutputFormat(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="png">PNG</option>
-              <option value="jpeg">JPG / JPEG</option>
-              <option value="webp">WebP</option>
-              <option value="bmp">BMP</option>
-            </select>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              {conversionType === 'image' ? 'Convert to:' : 'Output Format:'}
+            </label>
+            {conversionType === 'image' ? (
+              <select 
+                value={outputFormat} 
+                onChange={(e) => setOutputFormat(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="png">PNG</option>
+                <option value="jpeg">JPG / JPEG</option>
+                <option value="webp">WebP</option>
+                <option value="bmp">BMP</option>
+              </select>
+            ) : (
+              <div className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-gray-100 text-gray-700">
+                PDF (Fixed)
+              </div>
+            )}
           </div>
           <div className="flex items-end">
             <button 
