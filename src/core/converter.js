@@ -5,8 +5,8 @@
  */
 import mammoth from 'mammoth';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import pdfParse from 'pdf-parse';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import * as pdfjsLib from 'pdfjs-dist';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
 import * as XLSX from 'xlsx';
 import PptxGenJS from 'pptxgenjs';
 
@@ -111,11 +111,23 @@ export const convertDocxToPdf = (file) => {
   });
 };
 
-// ---------- HELPER: Extract text from PDF ----------
+// ---------- HELPER: Extract text from PDF using PDF.js (Browser Friendly) ----------
 const extractTextFromPdf = async (file) => {
+  // Set the worker source for PDF.js (required for browser)
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+  
   const arrayBuffer = await file.arrayBuffer();
-  const pdfData = await pdfParse(arrayBuffer);
-  return pdfData.text;
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = '';
+  
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map(item => item.str).join(' ');
+    fullText += pageText + '\n';
+  }
+  
+  return fullText;
 };
 
 // ---------- PDF TO DOCX ----------
