@@ -6,6 +6,7 @@
 import mammoth from 'mammoth';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
+import workerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'; // <<< local worker, no CDN
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import * as XLSX from 'xlsx';
 import PptxGenJS from 'pptxgenjs';
@@ -44,7 +45,7 @@ export const convertImage = (file, targetFormat) => {
   });
 };
 
-// ---------- DOCX TO PDF (Existing - Fixed) ----------
+// ---------- DOCX TO PDF ----------
 export const convertDocxToPdf = (file) => {
   return new Promise((resolve, reject) => {
     if (!file.name.endsWith('.docx') && !file.type.includes('word')) {
@@ -111,22 +112,22 @@ export const convertDocxToPdf = (file) => {
   });
 };
 
-// ---------- HELPER: Extract text from PDF using PDF.js (Browser Friendly) ----------
+// ---------- HELPER: Extract text from PDF using local worker ----------
 const extractTextFromPdf = async (file) => {
-  // Set the worker source for PDF.js (required for browser)
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-  
+  // Set the worker to our local bundled version (no CDN, works offline)
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   let fullText = '';
-  
+
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
     const pageText = textContent.items.map(item => item.str).join(' ');
     fullText += pageText + '\n';
   }
-  
+
   return fullText;
 };
 
@@ -155,13 +156,12 @@ export const convertPdfToDocx = async (file) => {
   }
 };
 
-// ---------- PDF TO XLSX (Excel) ----------
+// ---------- PDF TO XLSX ----------
 export const convertPdfToXlsx = async (file) => {
   try {
     const text = await extractTextFromPdf(file);
     if (!text.trim()) throw new Error('No text found in PDF.');
 
-    // Split text into rows by newline, then split each row by spaces/tabs
     const rows = text.split(/\r?\n/).filter(line => line.trim()).map(line => 
       line.split(/\s{2,}|\t/).map(cell => cell.trim())
     );
@@ -179,7 +179,7 @@ export const convertPdfToXlsx = async (file) => {
   }
 };
 
-// ---------- PDF TO PPTX (PowerPoint) ----------
+// ---------- PDF TO PPTX ----------
 export const convertPdfToPptx = async (file) => {
   try {
     const text = await extractTextFromPdf(file);
@@ -188,7 +188,6 @@ export const convertPdfToPptx = async (file) => {
     const pptx = new PptxGenJS();
     const lines = text.split(/\r?\n/).filter(line => line.trim());
 
-    // Create one slide per paragraph, or group text
     let slide = pptx.addSlide();
     let slideText = '';
     let slideCount = 0;
@@ -235,7 +234,6 @@ export const convertPdfToHtml = async (file) => {
     const text = await extractTextFromPdf(file);
     if (!text.trim()) throw new Error('No text found in PDF.');
     
-    // Wrap text in HTML paragraphs
     const htmlContent = `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><title>Converted PDF</title></head>
