@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import JSZip from 'jszip';
 import { 
   convertImage, 
   convertDocxToPdf, 
@@ -10,80 +11,102 @@ import {
 } from './core/converter';
 
 function App() {
-  const [file, setFile] = useState(null);
+  // --- State ---
+  const [files, setFiles] = useState([]); // Array of { id, file, name, size, status, result, progress, message }
   const [conversionType, setConversionType] = useState('image');
   const [outputFormat, setOutputFormat] = useState('png');
-  const [convertedFile, setConvertedFile] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  
-  // --- NEW: Progress Bar State ---
-  const [progress, setProgress] = useState(0);
-  const [progressMessage, setProgressMessage] = useState('');
-  // --- END NEW ---
+  const [overallProgress, setOverallProgress] = useState(0);
 
+  // --- Configuration ---
   const conversionConfigs = {
     image: {
       label: 'Image Converter',
       formats: ['png', 'jpeg', 'webp', 'bmp'],
       accept: 'image/*',
       defaultFormat: 'png',
-      convert: convertImage
+      convert: convertImage,
+      getFileName: (originalName, format) => {
+        const base = originalName.replace(/\.[^.]+$/, '');
+        return `${base}.${format}`;
+      }
     },
     pdfToDocx: {
       label: 'PDF → DOCX (Word)',
       formats: ['docx'],
       accept: '.pdf',
       defaultFormat: 'docx',
-      convert: convertPdfToDocx
+      convert: convertPdfToDocx,
+      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.docx')
     },
     pdfToXlsx: {
       label: 'PDF → XLSX (Excel)',
       formats: ['xlsx'],
       accept: '.pdf',
       defaultFormat: 'xlsx',
-      convert: convertPdfToXlsx
+      convert: convertPdfToXlsx,
+      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.xlsx')
     },
     pdfToPptx: {
       label: 'PDF → PPTX (PowerPoint)',
       formats: ['pptx'],
       accept: '.pdf',
       defaultFormat: 'pptx',
-      convert: convertPdfToPptx
+      convert: convertPdfToPptx,
+      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.pptx')
     },
     pdfToTxt: {
       label: 'PDF → TXT',
       formats: ['txt'],
       accept: '.pdf',
       defaultFormat: 'txt',
-      convert: convertPdfToTxt
+      convert: convertPdfToTxt,
+      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.txt')
     },
     pdfToHtml: {
       label: 'PDF → HTML',
       formats: ['html'],
       accept: '.pdf',
       defaultFormat: 'html',
-      convert: convertPdfToHtml
+      convert: convertPdfToHtml,
+      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.html')
     },
     docxToPdf: {
       label: 'DOCX → PDF',
       formats: ['pdf'],
       accept: '.docx',
       defaultFormat: 'pdf',
-      convert: convertDocxToPdf
+      convert: convertDocxToPdf,
+      getFileName: (originalName) => originalName.replace(/\.docx$/i, '.pdf')
     }
   };
 
   const currentConfig = conversionConfigs[conversionType];
 
-  const handleFileUpload = (e) => {
-    const uploaded = e.target.files[0];
-    if (uploaded) {
-      setFile(uploaded);
-      setConvertedFile(null);
-      setProgress(0);
-      setProgressMessage('');
-    }
+  // --- File Management ---
+  const addFiles = (newFiles) => {
+    const fileArray = Array.from(newFiles);
+    const newEntries = fileArray.map((file) => ({
+      id: Date.now() + Math.random() + file.name,
+      file: file,
+      name: file.name,
+      size: file.size,
+      status: 'pending', // pending, converting, done, error
+      result: null,
+      progress: 0,
+      message: 'Waiting...'
+    }));
+    setFiles(prev => [...prev, ...newEntries]);
+  };
+
+  const removeFile = (id) => {
+    setFiles(prev => prev.filter(f => f.id !== id));
+  };
+
+  const clearAll = () => {
+    setFiles([]);
+    setOverallProgress(0);
   };
 
   // --- Drag & Drop Handlers ---
@@ -94,59 +117,140 @@ function App() {
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files.length > 0) {
-      const droppedFile = e.dataTransfer.files[0];
-      setFile(droppedFile);
-      setConvertedFile(null);
-      setProgress(0);
-      setProgressMessage('');
+      addFiles(e.dataTransfer.files);
     }
   };
 
-  // --- NEW: Progress Callback (passed to conversion functions) ---
-  const handleProgress = (percent, message) => {
-    setProgress(percent);
-    setProgressMessage(message || '');
+  // --- File Input Change ---
+  const handleFileInput = (e) => {
+    if (e.target.files.length > 0) {
+      addFiles(e.target.files);
+    }
+    e.target.value = ''; // Reset so same file can be re-uploaded
   };
-  // --- END NEW ---
 
-  // --- Updated Convert Handler (passes onProgress) ---
-  const handleConvert = async () => {
-    if (!file) return alert('Please upload a file first.');
-    setIsLoading(true);
-    setProgress(0);
-    setProgressMessage('Starting...');
-    setConvertedFile(null);
-    
-    try {
-      let result;
-      if (conversionType === 'image') {
-        result = await convertImage(file, outputFormat, handleProgress);
-      } else {
-        result = await currentConfig.convert(file, handleProgress);
+  // --- Progress Callback for individual files ---
+  const updateFileProgress = (id, progress, message, status = 'converting') => {
+    setFiles(prev => prev.map(f => 
+      f.id === id ? { ...f, progress, message, status } : f
+    ));
+  };
+
+  // --- Batch Convert ---
+  const handleBatchConvert = async () => {
+    if (files.length === 0) return alert('Please upload at least one file.');
+    if (isConverting) return;
+
+    setIsConverting(true);
+    setOverallProgress(0);
+
+    const pendingFiles = files.filter(f => f.status === 'pending');
+    if (pendingFiles.length === 0) {
+      alert('All files have already been converted or are in progress.');
+      setIsConverting(false);
+      return;
+    }
+
+    let completedCount = 0;
+
+    for (const fileEntry of pendingFiles) {
+      const { id, file } = fileEntry;
+      
+      updateFileProgress(id, 0, 'Starting...', 'converting');
+
+      try {
+        let result;
+        let onProgress = (percent, message) => {
+          updateFileProgress(id, percent, message || 'Converting...', 'converting');
+          
+          // Update overall progress (average across all files)
+          const allFiles = files.map(f => 
+            f.id === id ? { ...f, progress: percent, message: message || 'Converting...', status: 'converting' } : f
+          );
+          setFiles(allFiles);
+          
+          const totalProgress = allFiles.reduce((sum, f) => sum + f.progress, 0);
+          const avg = totalProgress / allFiles.length;
+          setOverallProgress(Math.round(avg));
+        };
+
+        if (conversionType === 'image') {
+          result = await convertImage(file, outputFormat, onProgress);
+        } else {
+          result = await currentConfig.convert(file, onProgress);
+        }
+
+        // Generate the output filename
+        let outputName;
+        if (conversionType === 'image') {
+          const base = file.name.replace(/\.[^.]+$/, '');
+          outputName = `${base}.${outputFormat}`;
+        } else {
+          outputName = currentConfig.getFileName(file.name);
+        }
+
+        // Store result
+        setFiles(prev => prev.map(f =>
+          f.id === id ? { ...f, status: 'done', result: { ...result, name: outputName }, progress: 100, message: 'Complete!' } : f
+        ));
+
+        completedCount++;
+
+      } catch (error) {
+        setFiles(prev => prev.map(f =>
+          f.id === id ? { ...f, status: 'error', message: 'Failed: ' + error.message, progress: 0 } : f
+        ));
+        console.error(`Failed to convert ${file.name}:`, error);
       }
-      setConvertedFile(result);
-    } catch (error) {
-      alert('Conversion failed: ' + error.message);
-      setProgress(0);
-      setProgressMessage('');
-    } finally {
-      setIsLoading(false);
+
+      // Update overall progress
+      const currentFiles = files;
+      const totalProgress = currentFiles.reduce((sum, f) => sum + f.progress, 0);
+      const avg = totalProgress / currentFiles.length;
+      setOverallProgress(Math.round(avg));
     }
+
+    setIsConverting(false);
   };
 
-  const handleDownload = () => {
-    if (!convertedFile) return;
+  // --- Download All as ZIP ---
+  const handleDownloadAll = async () => {
+    const doneFiles = files.filter(f => f.status === 'done' && f.result);
+    if (doneFiles.length === 0) {
+      alert('No converted files to download.');
+      return;
+    }
+
+    if (doneFiles.length === 1) {
+      // Just download the single file directly
+      const { result } = doneFiles[0];
+      const link = document.createElement('a');
+      link.href = result.url;
+      link.download = result.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
+    // Multiple files - create ZIP
+    const zip = new JSZip();
+    for (const fileEntry of doneFiles) {
+      const blob = await fetch(fileEntry.result.url).then(r => r.blob());
+      zip.file(fileEntry.result.name, blob);
+    }
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const zipUrl = URL.createObjectURL(zipBlob);
     const link = document.createElement('a');
-    link.href = convertedFile.url;
-    link.download = convertedFile.name;
+    link.href = zipUrl;
+    link.download = `FileFlick_Converted_${Date.now()}.zip`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    // Reset progress after download
-    setProgress(0);
-    setProgressMessage('');
   };
 
+  // --- Get format display name ---
   const getFormatDisplay = (format) => {
     const map = {
       png: 'PNG', jpeg: 'JPG', webp: 'WebP', bmp: 'BMP',
@@ -156,9 +260,34 @@ function App() {
     return map[format] || format.toUpperCase();
   };
 
+  // --- Format file size ---
+  const formatSize = (bytes) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  };
+
+  // --- Status badge color ---
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'pending': return 'bg-gray-200 text-gray-700';
+      case 'converting': return 'bg-blue-200 text-blue-700';
+      case 'done': return 'bg-green-200 text-green-700';
+      case 'error': return 'bg-red-200 text-red-700';
+      default: return 'bg-gray-200 text-gray-700';
+    }
+  };
+
+  // --- Count done files ---
+  const doneCount = files.filter(f => f.status === 'done').length;
+  const pendingCount = files.filter(f => f.status === 'pending').length;
+  const convertingCount = files.filter(f => f.status === 'converting').length;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col items-center justify-center p-4">
-      <div className="max-w-2xl w-full bg-white rounded-2xl shadow-2xl p-8 border border-gray-100">
+      <div className="max-w-4xl w-full bg-white rounded-2xl shadow-2xl p-8 border border-gray-100">
+        
+        {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">
             FileFlick
@@ -167,6 +296,7 @@ function App() {
           <p className="text-xs text-gray-400 mt-1">No sign-up required. Files never leave your device.</p>
         </div>
 
+        {/* Conversion Type Selector */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">Conversion Type:</label>
           <select 
@@ -175,10 +305,8 @@ function App() {
               setConversionType(e.target.value);
               const config = conversionConfigs[e.target.value];
               setOutputFormat(config.defaultFormat);
-              setFile(null);
-              setConvertedFile(null);
-              setProgress(0);
-              setProgressMessage('');
+              setFiles([]);
+              setOverallProgress(0);
             }}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
           >
@@ -206,21 +334,83 @@ function App() {
         >
           <input 
             type="file" 
-            onChange={handleFileUpload} 
+            onChange={handleFileInput} 
             accept={currentConfig.accept}
+            multiple
             className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
           />
-          {file ? (
-            <p className="mt-2 text-sm text-gray-600 truncate">
-              ✅ Selected: <span className="font-mono">{file.name}</span> ({(file.size / 1024).toFixed(1)} KB)
-            </p>
-          ) : (
-            <p className="mt-2 text-sm text-gray-400 text-center">
-              {isDragging ? '✨ Drop your file here!' : '📁 Drag & drop a file here, or click to browse'}
-            </p>
-          )}
+          <p className="mt-2 text-sm text-gray-400 text-center">
+            {isDragging ? '✨ Drop your files here!' : '📁 Drag & drop files here, or click to browse (multiple allowed)'}
+          </p>
         </div>
 
+        {/* File Queue */}
+        {files.length > 0 && (
+          <div className="mt-6">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-sm font-medium text-gray-700">
+                Files ({files.length}) 
+                {pendingCount > 0 && ` · ${pendingCount} pending`}
+                {convertingCount > 0 && ` · ${convertingCount} converting`}
+                {doneCount > 0 && ` · ${doneCount} done`}
+              </h3>
+              <button 
+                onClick={clearAll}
+                className="text-xs text-red-500 hover:text-red-700 font-medium"
+                disabled={isConverting}
+              >
+                Clear All
+              </button>
+            </div>
+
+            <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+              {files.map((fileEntry) => (
+                <div key={fileEntry.id} className="flex items-center justify-between p-3 hover:bg-gray-50">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${getStatusColor(fileEntry.status)}`}>
+                        {fileEntry.status}
+                      </span>
+                      <span className="text-sm font-medium truncate">{fileEntry.name}</span>
+                      <span className="text-xs text-gray-400">{formatSize(fileEntry.size)}</span>
+                    </div>
+                    {fileEntry.status === 'converting' && (
+                      <div className="mt-1">
+                        <div className="flex justify-between text-xs text-blue-600">
+                          <span>{fileEntry.message}</span>
+                          <span>{Math.round(fileEntry.progress)}%</span>
+                        </div>
+                        <div className="w-full bg-blue-100 rounded-full h-1.5">
+                          <div 
+                            className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
+                            style={{ width: `${Math.min(100, fileEntry.progress)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {fileEntry.status === 'error' && (
+                      <p className="text-xs text-red-500 truncate">{fileEntry.message}</p>
+                    )}
+                    {fileEntry.status === 'done' && fileEntry.result && (
+                      <p className="text-xs text-green-600">
+                        ✅ {fileEntry.result.name}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => removeFile(fileEntry.id)}
+                    className="ml-2 text-gray-400 hover:text-red-500 text-sm"
+                    disabled={isConverting}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
         <div className="grid grid-cols-2 gap-4 mt-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Output Format:</label>
@@ -242,40 +432,42 @@ function App() {
           </div>
           <div className="flex items-end">
             <button 
-              onClick={handleConvert}
-              disabled={isLoading || !file}
+              onClick={handleBatchConvert}
+              disabled={isConverting || files.length === 0}
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-md hover:shadow-lg"
             >
-              {isLoading ? '⚡ Converting...' : '🚀 Convert Now'}
+              {isConverting ? '⚡ Converting...' : '🚀 Convert All'}
             </button>
           </div>
         </div>
 
-        {/* --- NEW: Progress Bar --- */}
-        {isLoading && (
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+        {/* Overall Progress */}
+        {isConverting && (
+          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-xl">
             <div className="flex justify-between text-sm text-blue-700 mb-1">
-              <span>{progressMessage}</span>
-              <span>{Math.round(progress)}%</span>
+              <span>Overall Progress</span>
+              <span>{Math.round(overallProgress)}%</span>
             </div>
             <div className="w-full bg-blue-200 rounded-full h-2.5 overflow-hidden">
               <div 
                 className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-in-out"
-                style={{ width: `${Math.min(100, progress)}%` }}
+                style={{ width: `${Math.min(100, overallProgress)}%` }}
               />
             </div>
           </div>
         )}
-        {/* --- END NEW --- */}
 
-        {convertedFile && (
-          <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-xl flex justify-between items-center animate-fade-in">
-            <span className="text-green-700 font-medium">✅ Conversion complete!</span>
+        {/* Download All Button */}
+        {doneCount > 0 && !isConverting && (
+          <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl flex justify-between items-center">
+            <span className="text-green-700 font-medium">
+              ✅ {doneCount} file{doneCount > 1 ? 's' : ''} converted!
+            </span>
             <button 
-              onClick={handleDownload}
+              onClick={handleDownloadAll}
               className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow"
             >
-              ⬇️ Download {convertedFile.name}
+              ⬇️ Download {doneCount > 1 ? 'All as ZIP' : 'File'}
             </button>
           </div>
         )}
