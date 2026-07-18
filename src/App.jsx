@@ -79,11 +79,21 @@ function App() {
     }
   };
 
+  // ---------- FIXED: Handle conversion with proper parameters ----------
   const handleConvert = async () => {
     if (!file) return alert('Please upload a file first.');
     setIsLoading(true);
     try {
-      const result = await currentConfig.convert(file);
+      let result;
+      
+      // For image conversion, pass both file AND outputFormat
+      if (conversionType === 'image') {
+        result = await convertImage(file, outputFormat);
+      } else {
+        // For all other conversions, just pass the file
+        result = await currentConfig.convert(file);
+      }
+      
       setConvertedFile(result);
     } catch (error) {
       alert('Conversion failed: ' + error.message);
