@@ -15,9 +15,11 @@ function App() {
   const [outputFormat, setOutputFormat] = useState('png');
   const [convertedFile, setConvertedFile] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  
-  // --- NEW: State for Drag & Drop Animation ---
   const [isDragging, setIsDragging] = useState(false);
+  
+  // --- NEW: Progress Bar State ---
+  const [progress, setProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
   // --- END NEW ---
 
   const conversionConfigs = {
@@ -79,24 +81,15 @@ function App() {
     if (uploaded) {
       setFile(uploaded);
       setConvertedFile(null);
+      setProgress(0);
+      setProgressMessage('');
     }
   };
 
-  // --- NEW: Drag & Drop Event Handlers ---
-  const handleDragOver = (e) => {
-    e.preventDefault(); // Required to allow drop
-  };
-
-  const handleDragEnter = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
+  // --- Drag & Drop Handlers ---
+  const handleDragOver = (e) => e.preventDefault();
+  const handleDragEnter = (e) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
@@ -104,23 +97,38 @@ function App() {
       const droppedFile = e.dataTransfer.files[0];
       setFile(droppedFile);
       setConvertedFile(null);
+      setProgress(0);
+      setProgressMessage('');
     }
+  };
+
+  // --- NEW: Progress Callback (passed to conversion functions) ---
+  const handleProgress = (percent, message) => {
+    setProgress(percent);
+    setProgressMessage(message || '');
   };
   // --- END NEW ---
 
+  // --- Updated Convert Handler (passes onProgress) ---
   const handleConvert = async () => {
     if (!file) return alert('Please upload a file first.');
     setIsLoading(true);
+    setProgress(0);
+    setProgressMessage('Starting...');
+    setConvertedFile(null);
+    
     try {
       let result;
       if (conversionType === 'image') {
-        result = await convertImage(file, outputFormat);
+        result = await convertImage(file, outputFormat, handleProgress);
       } else {
-        result = await currentConfig.convert(file);
+        result = await currentConfig.convert(file, handleProgress);
       }
       setConvertedFile(result);
     } catch (error) {
       alert('Conversion failed: ' + error.message);
+      setProgress(0);
+      setProgressMessage('');
     } finally {
       setIsLoading(false);
     }
@@ -134,6 +142,9 @@ function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    // Reset progress after download
+    setProgress(0);
+    setProgressMessage('');
   };
 
   const getFormatDisplay = (format) => {
@@ -166,6 +177,8 @@ function App() {
               setOutputFormat(config.defaultFormat);
               setFile(null);
               setConvertedFile(null);
+              setProgress(0);
+              setProgressMessage('');
             }}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
           >
@@ -179,7 +192,7 @@ function App() {
           </select>
         </div>
 
-        {/* --- UPDATED: Drop Zone with Drag & Drop Animations --- */}
+        {/* Drop Zone */}
         <div 
           className={`border-2 border-dashed rounded-xl p-6 transition-all duration-200 ease-in-out 
             ${isDragging 
@@ -207,7 +220,6 @@ function App() {
             </p>
           )}
         </div>
-        {/* --- END UPDATED --- */}
 
         <div className="grid grid-cols-2 gap-4 mt-6">
           <div>
@@ -238,6 +250,23 @@ function App() {
             </button>
           </div>
         </div>
+
+        {/* --- NEW: Progress Bar --- */}
+        {isLoading && (
+          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+            <div className="flex justify-between text-sm text-blue-700 mb-1">
+              <span>{progressMessage}</span>
+              <span>{Math.round(progress)}%</span>
+            </div>
+            <div className="w-full bg-blue-200 rounded-full h-2.5 overflow-hidden">
+              <div 
+                className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-in-out"
+                style={{ width: `${Math.min(100, progress)}%` }}
+              />
+            </div>
+          </div>
+        )}
+        {/* --- END NEW --- */}
 
         {convertedFile && (
           <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-xl flex justify-between items-center animate-fade-in">
