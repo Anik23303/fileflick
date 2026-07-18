@@ -12,7 +12,7 @@ import {
 
 function App() {
   // --- State ---
-  const [files, setFiles] = useState([]); // Array of { id, file, name, size, status, result, progress, message }
+  const [files, setFiles] = useState([]);
   const [conversionType, setConversionType] = useState('image');
   const [outputFormat, setOutputFormat] = useState('png');
   const [isConverting, setIsConverting] = useState(false);
@@ -92,7 +92,7 @@ function App() {
       file: file,
       name: file.name,
       size: file.size,
-      status: 'pending', // pending, converting, done, error
+      status: 'pending',
       result: null,
       progress: 0,
       message: 'Waiting...'
@@ -101,15 +101,17 @@ function App() {
   };
 
   const removeFile = (id) => {
+    if (isConverting) return;
     setFiles(prev => prev.filter(f => f.id !== id));
   };
 
   const clearAll = () => {
+    if (isConverting) return;
     setFiles([]);
     setOverallProgress(0);
   };
 
-  // --- Drag & Drop Handlers ---
+  // --- Drag & Drop ---
   const handleDragOver = (e) => e.preventDefault();
   const handleDragEnter = (e) => { e.preventDefault(); setIsDragging(true); };
   const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
@@ -121,66 +123,65 @@ function App() {
     }
   };
 
-  // --- File Input Change ---
   const handleFileInput = (e) => {
     if (e.target.files.length > 0) {
       addFiles(e.target.files);
     }
-    e.target.value = ''; // Reset so same file can be re-uploaded
+    e.target.value = '';
   };
 
-  // --- Progress Callback for individual files ---
+  // --- Update individual file progress (safe functional update) ---
   const updateFileProgress = (id, progress, message, status = 'converting') => {
     setFiles(prev => prev.map(f => 
       f.id === id ? { ...f, progress, message, status } : f
     ));
   };
 
-  // --- Batch Convert ---
+  // --- FIXED: Bulletproof Batch Converter ---
   const handleBatchConvert = async () => {
-    if (files.length === 0) return alert('Please upload at least one file.');
+    // 1. Validation
+    const pendingFiles = files.filter(f => f.status === 'pending');
+    if (pendingFiles.length === 0) {
+      alert('No pending files to convert.');
+      return;
+    }
     if (isConverting) return;
-
+    
     setIsConverting(true);
     setOverallProgress(0);
 
-    const pendingFiles = files.filter(f => f.status === 'pending');
-    if (pendingFiles.length === 0) {
-      alert('All files have already been converted or are in progress.');
-      setIsConverting(false);
-      return;
-    }
-
+    const totalFiles = pendingFiles.length;
     let completedCount = 0;
 
-    for (const fileEntry of pendingFiles) {
+    // 2. Process files ONE BY ONE using a simple for loop
+    for (let i = 0; i < pendingFiles.length; i++) {
+      const fileEntry = pendingFiles[i];
       const { id, file } = fileEntry;
       
+      // Log to console so you can see progress
+      console.log(`🔄 Processing ${i+1}/${totalFiles}: ${file.name}`);
+
+      // Mark as converting
       updateFileProgress(id, 0, 'Starting...', 'converting');
 
       try {
-        let result;
-        let onProgress = (percent, message) => {
-          updateFileProgress(id, percent, message || 'Converting...', 'converting');
-          
-          // Update overall progress (average across all files)
-          const allFiles = files.map(f => 
+        // Define progress callback (safely updates only this file)
+        const onProgress = (percent, message) => {
+          // Update the specific file's progress
+          setFiles(prev => prev.map(f => 
             f.id === id ? { ...f, progress: percent, message: message || 'Converting...', status: 'converting' } : f
-          );
-          setFiles(allFiles);
-          
-          const totalProgress = allFiles.reduce((sum, f) => sum + f.progress, 0);
-          const avg = totalProgress / allFiles.length;
-          setOverallProgress(Math.round(avg));
+          ));
         };
 
+        // Run the conversion
+        let result;
         if (conversionType === 'image') {
           result = await convertImage(file, outputFormat, onProgress);
         } else {
           result = await currentConfig.convert(file, onProgress);
         }
 
-        // Generate the output filename
+        // Generate output filename
         let outputName;
         if (conversionType === 'image') {
           const base = file.name.replace(/\.[^.]+$/, '');
@@ -189,31 +190,33 @@ function App() {
           outputName = currentConfig.getFileName(file.name);
         }
 
-        // Store result
+        // Mark as done
         setFiles(prev => prev.map(f =>
           f.id === id ? { ...f, status: 'done', result: { ...result, name: outputName }, progress: 100, message: 'Complete!' } : f
         ));
 
         completedCount++;
+        console.log(`✅ ${i+1}/${totalFiles} Done: ${file.name}`);
 
       } catch (error) {
+        // Mark as error
         setFiles(prev => prev.map(f =>
           f.id === id ? { ...f, status: 'error', message: 'Failed: ' + error.message, progress: 0 } : f
         ));
-        console.error(`Failed to convert ${file.name}:`, error);
+        console.error(`❌ ${i+1}/${totalFiles} Failed: ${file.name}`, error);
       }
 
-      // Update overall progress
-      const currentFiles = files;
-      const totalProgress = currentFiles.reduce((sum, f) => sum + f.progress, 0);
-      const avg = totalProgress / currentFiles.length;
-      setOverallProgress(Math.round(avg));
+      // Update overall progress (based on completed count vs total)
+      const overall = Math.round((completedCount / totalFiles) * 100);
+      setOverallProgress(overall);
     }
 
+    // 3. All done
     setIsConverting(false);
+    console.log('🎉 Batch processing complete!');
   };
 
-  // --- Download All as ZIP ---
+  // --- Download All (ZIP or Single) ---
   const handleDownloadAll = async () => {
     const doneFiles = files.filter(f => f.status === 'done' && f.result);
     if (doneFiles.length === 0) {
@@ -222,7 +225,6 @@ function App() {
     }
 
     if (doneFiles.length === 1) {
-      // Just download the single file directly
       const { result } = doneFiles[0];
       const link = document.createElement('a');
       link.href = result.url;
@@ -233,7 +235,6 @@ function App() {
       return;
     }
 
-    // Multiple files - create ZIP
     const zip = new JSZip();
     for (const fileEntry of doneFiles) {
       const blob = await fetch(fileEntry.result.url).then(r => r.blob());
@@ -250,7 +251,7 @@ function App() {
     document.body.removeChild(link);
   };
 
-  // --- Get format display name ---
+  // --- Helpers ---
   const getFormatDisplay = (format) => {
     const map = {
       png: 'PNG', jpeg: 'JPG', webp: 'WebP', bmp: 'BMP',
@@ -260,14 +261,12 @@ function App() {
     return map[format] || format.toUpperCase();
   };
 
-  // --- Format file size ---
   const formatSize = (bytes) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1048576).toFixed(1) + ' MB';
   };
 
-  // --- Status badge color ---
   const getStatusColor = (status) => {
     switch (status) {
       case 'pending': return 'bg-gray-200 text-gray-700';
@@ -278,16 +277,13 @@ function App() {
     }
   };
 
-  // --- Count done files ---
   const doneCount = files.filter(f => f.status === 'done').length;
   const pendingCount = files.filter(f => f.status === 'pending').length;
-  const convertingCount = files.filter(f => f.status === 'converting').length;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col items-center justify-center p-4">
       <div className="max-w-4xl w-full bg-white rounded-2xl shadow-2xl p-8 border border-gray-100">
         
-        {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">
             FileFlick
@@ -296,7 +292,6 @@ function App() {
           <p className="text-xs text-gray-400 mt-1">No sign-up required. Files never leave your device.</p>
         </div>
 
-        {/* Conversion Type Selector */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">Conversion Type:</label>
           <select 
@@ -351,7 +346,6 @@ function App() {
               <h3 className="text-sm font-medium text-gray-700">
                 Files ({files.length}) 
                 {pendingCount > 0 && ` · ${pendingCount} pending`}
-                {convertingCount > 0 && ` · ${convertingCount} converting`}
                 {doneCount > 0 && ` · ${doneCount} done`}
               </h3>
               <button 
@@ -433,7 +427,7 @@ function App() {
           <div className="flex items-end">
             <button 
               onClick={handleBatchConvert}
-              disabled={isConverting || files.length === 0}
+              disabled={isConverting || files.length === 0 || pendingCount === 0}
               className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-md hover:shadow-lg"
             >
               {isConverting ? '⚡ Converting...' : '🚀 Convert All'}
@@ -457,7 +451,7 @@ function App() {
           </div>
         )}
 
-        {/* Download All Button */}
+        {/* Download All */}
         {doneCount > 0 && !isConverting && (
           <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl flex justify-between items-center">
             <span className="text-green-700 font-medium">
@@ -473,7 +467,7 @@ function App() {
         )}
 
         <div className="mt-6 text-center text-xs text-gray-400 border-t border-gray-200 pt-4">
-          🔒 100% Client-Side · No uploads to servers · <a href="#" className="text-blue-500 hover:underline">Source on GitHub</a>
+          🔒 100% Client-Side · No uploads to servers
         </div>
       </div>
     </div>
