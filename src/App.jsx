@@ -531,8 +531,9 @@ function App() {
         )}
 
         <div className="mt-6 text-center text-xs text-gray-400 border-t border-gray-200 pt-4">
-          🔒 100% Client-Side · No uploads to servers
-        </div>
+          🔒 100% Client-Side · No uploads to servers</div>
+        <div className="mt-6 text-center text-xs text-gray-400 border-t border-gray-200 pt-4">
+          Developed by Anik</div>
       </div>
     </div>
   );
