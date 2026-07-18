@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { 
   convertImage, 
@@ -17,37 +17,32 @@ function App() {
   const [isConverting, setIsConverting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [overallProgress, setOverallProgress] = useState(0);
-  const [detectedType, setDetectedType] = useState(null); // 'image', 'pdf', 'docx', or null
+  const [detectedType, setDetectedType] = useState(null);
+  const [isMixed, setIsMixed] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   // --- File Type Detection Logic ---
   const detectFileType = (file) => {
-    // 1. Check MIME type
     const type = file.type;
     if (type.startsWith('image/')) return 'image';
     if (type === 'application/pdf') return 'pdf';
     if (type.includes('word') || type.includes('document')) return 'docx';
 
-    // 2. Fallback: Check file extension
     const name = file.name.toLowerCase();
     if (name.endsWith('.pdf')) return 'pdf';
     if (name.endsWith('.docx') || name.endsWith('.doc')) return 'docx';
     if (name.match(/\.(png|jpg|jpeg|webp|bmp|gif|svg|tiff)$/)) return 'image';
 
-    // 3. Unknown
     return null;
   };
 
   // --- Get available output formats based on detected type ---
   const getAvailableFormats = (type) => {
     switch (type) {
-      case 'image':
-        return ['png', 'jpeg', 'webp', 'bmp'];
-      case 'pdf':
-        return ['docx', 'xlsx', 'pptx', 'txt', 'html'];
-      case 'docx':
-        return ['pdf'];
-      default:
-        return [];
+      case 'image': return ['png', 'jpeg', 'webp', 'bmp'];
+      case 'pdf': return ['docx', 'xlsx', 'pptx', 'txt', 'html'];
+      case 'docx': return ['pdf'];
+      default: return [];
     }
   };
 
@@ -84,15 +79,63 @@ function App() {
       case 'image': return '🖼️ Image';
       case 'pdf': return '📄 PDF';
       case 'docx': return '📄 DOCX';
-      default: return '❓ Unknown';
+      default: return '❓ Unsupported';
     }
   };
+
+  // --- NEW: Validation Effect (Runs every time 'files' changes) ---
+  useEffect(() => {
+    // Reset states if no files
+    if (files.length === 0) {
+      setIsMixed(false);
+      setErrorMessage('');
+      setDetectedType(null);
+      return;
+    }
+
+    // Get all file types
+    const types = files.map(f => f.fileType);
+    const hasNull = types.some(t => t === null);
+    const allSame = types.every(t => t === types[0]) && types[0] !== null;
+
+    // Case 1: Unsupported file types present
+    if (hasNull) {
+      const unsupportedNames = files.filter(f => f.fileType === null).map(f => f.name).join(', ');
+      setIsMixed(true);
+      setDetectedType(null);
+      setErrorMessage(`❌ Unsupported file(s): ${unsupportedNames}. Please upload only Images, PDFs, or DOCX files.`);
+      return;
+    }
+
+    // Case 2: Mixed types present (e.g., PDFs + Images)
+    if (!allSame) {
+      const uniqueTypes = [...new Set(types)];
+      const typeNames = uniqueTypes.map(t => 
+        t === 'image' ? 'Images' : t === 'pdf' ? 'PDFs' : 'DOCX files'
+      ).join(' and ');
+      setIsMixed(true);
+      setDetectedType(null);
+      setErrorMessage(`⚠️ Mixed file types detected (${typeNames}). Please keep only one type (Images, PDFs, or DOCX) in the queue to convert.`);
+      return;
+    }
+
+    // Case 3: All files are the SAME valid type
+    const detected = types[0];
+    setDetectedType(detected);
+    setIsMixed(false);
+    setErrorMessage('');
+    
+    // Set default output format if needed
+    const formats = getAvailableFormats(detected);
+    if (formats.length > 0 && !formats.includes(outputFormat)) {
+      setOutputFormat(formats[0]);
+    }
+  }, [files, outputFormat]);
 
   // --- File Management ---
   const addFiles = (newFiles) => {
     const fileArray = Array.from(newFiles);
     
-    // Detect types for all files
     const newEntries = fileArray.map((file) => ({
       id: Date.now() + Math.random() + file.name,
       file: file,
@@ -102,55 +145,20 @@ function App() {
       result: null,
       progress: 0,
       message: 'Waiting...',
-      fileType: detectFileType(file)
+      fileType: detectFileType(file) // Stores the detected type
     }));
 
-    // Check for unsupported files
-    const unsupported = newEntries.filter(f => f.fileType === null);
-    if (unsupported.length > 0) {
-      const names = unsupported.map(f => f.name).join(', ');
-      alert(`❌ Unsupported file type(s): ${names}. Please upload only Images, PDFs, or DOCX files.`);
-      // Remove unsupported files from the list
-      const supportedEntries = newEntries.filter(f => f.fileType !== null);
-      if (supportedEntries.length === 0) return;
-      newEntries = supportedEntries;
-    }
-
-    // Batch validation: Check if all files are the same type
-    const allTypes = newEntries.map(f => f.fileType);
-    const allSame = allTypes.every(t => t === allTypes[0]);
-
-    if (!allSame && newEntries.length > 1) {
-      alert('⚠️ All files must be of the same type for batch conversion. Please upload only images, only PDFs, or only DOCX files together.');
-      return;
-    }
-
-    // If all are the same, set the detected type and default output format
-    if (allSame && newEntries.length > 0) {
-      const newType = allTypes[0];
-      setDetectedType(newType);
-      const formats = getAvailableFormats(newType);
-      if (formats.length > 0) setOutputFormat(formats[0]);
-    }
-
-    // Add files to the queue
     setFiles(prev => [...prev, ...newEntries]);
   };
 
   const removeFile = (id) => {
     if (isConverting) return;
-    setFiles(prev => {
-      const newFiles = prev.filter(f => f.id !== id);
-      // If no files left, reset detected type
-      if (newFiles.length === 0) setDetectedType(null);
-      return newFiles;
-    });
+    setFiles(prev => prev.filter(f => f.id !== id));
   };
 
   const clearAll = () => {
     if (isConverting) return;
     setFiles([]);
-    setDetectedType(null);
     setOverallProgress(0);
   };
 
@@ -182,6 +190,11 @@ function App() {
 
   // --- Batch Converter ---
   const handleBatchConvert = async () => {
+    if (isMixed) {
+      alert('Please fix the mixed file types before converting.');
+      return;
+    }
+    
     const pendingFiles = files.filter(f => f.status === 'pending');
     if (pendingFiles.length === 0) {
       alert('No pending files to convert.');
@@ -224,7 +237,6 @@ function App() {
           result = await convertFunc(file, onProgress);
         }
 
-        // Generate output filename
         const base = file.name.replace(/\.[^.]+$/, '');
         const outputName = `${base}.${outputFormat}`;
 
@@ -306,7 +318,6 @@ function App() {
   const pendingCount = files.filter(f => f.status === 'pending').length;
   const totalCount = files.length;
 
-  // Determine button text based on pending files count
   const getButtonText = () => {
     if (isConverting) return '⚡ Converting...';
     if (pendingCount === 0) return '✅ All Converted';
@@ -325,7 +336,7 @@ function App() {
           <p className="text-xs text-gray-400 mt-1">No sign-up required. Files never leave your device.</p>
         </div>
 
-        {/* --- UPDATED: Drop Zone (No Conversion Type Selector) --- */}
+        {/* Drop Zone */}
         <div 
           className={`border-2 border-dashed rounded-xl p-6 transition-all duration-200 ease-in-out 
             ${isDragging 
@@ -352,8 +363,8 @@ function App() {
           </p>
         </div>
 
-        {/* --- NEW: Detected File Type Badge --- */}
-        {detectedType && totalCount > 0 && (
+        {/* Detected File Type Badge */}
+        {detectedType && totalCount > 0 && !isMixed && (
           <div className="mt-4 flex items-center gap-2">
             <span className="text-sm font-medium text-gray-700">Detected:</span>
             <span className="bg-blue-100 text-blue-800 text-sm font-medium px-3 py-1 rounded-full">
@@ -362,6 +373,20 @@ function App() {
             <span className="text-xs text-gray-400">
               ({totalCount} file{totalCount > 1 ? 's' : ''})
             </span>
+          </div>
+        )}
+
+        {/* --- NEW: Dynamic Error Banner --- */}
+        {isMixed && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+            <span className="text-red-500 text-lg">⚠️</span>
+            <div>
+              <p className="text-sm text-red-700 font-medium">Conversion Blocked</p>
+              <p className="text-sm text-red-600">{errorMessage}</p>
+              <p className="text-xs text-red-500 mt-1">
+                Please remove or replace the incompatible files above to enable conversion.
+              </p>
+            </div>
           </div>
         )}
 
@@ -391,6 +416,17 @@ function App() {
                       <span className={`text-xs px-2 py-0.5 rounded-full ${getStatusColor(fileEntry.status)}`}>
                         {fileEntry.status}
                       </span>
+                      {/* Show file type indicator */}
+                      {fileEntry.fileType && (
+                        <span className="text-xs text-gray-400">
+                          {getTypeDisplay(fileEntry.fileType)}
+                        </span>
+                      )}
+                      {!fileEntry.fileType && (
+                        <span className="text-xs text-red-400">
+                          ❌ Unsupported
+                        </span>
+                      )}
                       <span className="text-sm font-medium truncate">{fileEntry.name}</span>
                       <span className="text-xs text-gray-400">{formatSize(fileEntry.size)}</span>
                     </div>
@@ -430,8 +466,8 @@ function App() {
           </div>
         )}
 
-        {/* --- UPDATED: Output Format + Convert Button --- */}
-        {detectedType && totalCount > 0 && (
+        {/* Controls */}
+        {detectedType && totalCount > 0 && !isMixed && (
           <div className="grid grid-cols-2 gap-4 mt-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Output Format:</label>
@@ -454,7 +490,7 @@ function App() {
             <div className="flex items-end">
               <button 
                 onClick={handleBatchConvert}
-                disabled={isConverting || pendingCount === 0}
+                disabled={isConverting || pendingCount === 0 || isMixed}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-md hover:shadow-lg"
               >
                 {getButtonText()}
