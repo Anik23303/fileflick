@@ -15,8 +15,11 @@ function App() {
   const [outputFormat, setOutputFormat] = useState('png');
   const [convertedFile, setConvertedFile] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // --- NEW: State for Drag & Drop Animation ---
+  const [isDragging, setIsDragging] = useState(false);
+  // --- END NEW ---
 
-  // Define conversion types and their available output formats
   const conversionConfigs = {
     image: {
       label: 'Image Converter',
@@ -79,21 +82,42 @@ function App() {
     }
   };
 
-  // ---------- FIXED: Handle conversion with proper parameters ----------
+  // --- NEW: Drag & Drop Event Handlers ---
+  const handleDragOver = (e) => {
+    e.preventDefault(); // Required to allow drop
+  };
+
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files.length > 0) {
+      const droppedFile = e.dataTransfer.files[0];
+      setFile(droppedFile);
+      setConvertedFile(null);
+    }
+  };
+  // --- END NEW ---
+
   const handleConvert = async () => {
     if (!file) return alert('Please upload a file first.');
     setIsLoading(true);
     try {
       let result;
-      
-      // For image conversion, pass both file AND outputFormat
       if (conversionType === 'image') {
         result = await convertImage(file, outputFormat);
       } else {
-        // For all other conversions, just pass the file
         result = await currentConfig.convert(file);
       }
-      
       setConvertedFile(result);
     } catch (error) {
       alert('Conversion failed: ' + error.message);
@@ -112,7 +136,6 @@ function App() {
     document.body.removeChild(link);
   };
 
-  // Get display name for output format
   const getFormatDisplay = (format) => {
     const map = {
       png: 'PNG', jpeg: 'JPG', webp: 'WebP', bmp: 'BMP',
@@ -133,7 +156,6 @@ function App() {
           <p className="text-xs text-gray-400 mt-1">No sign-up required. Files never leave your device.</p>
         </div>
 
-        {/* Conversion Type Selector */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">Conversion Type:</label>
           <select 
@@ -157,22 +179,36 @@ function App() {
           </select>
         </div>
 
-        {/* File Upload Area */}
-        <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 hover:border-blue-400 transition-colors">
+        {/* --- UPDATED: Drop Zone with Drag & Drop Animations --- */}
+        <div 
+          className={`border-2 border-dashed rounded-xl p-6 transition-all duration-200 ease-in-out 
+            ${isDragging 
+              ? 'border-blue-500 bg-blue-50 scale-105 shadow-lg' 
+              : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
+            }`}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           <input 
             type="file" 
             onChange={handleFileUpload} 
             accept={currentConfig.accept}
-            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
           />
-          {file && (
+          {file ? (
             <p className="mt-2 text-sm text-gray-600 truncate">
               ✅ Selected: <span className="font-mono">{file.name}</span> ({(file.size / 1024).toFixed(1)} KB)
             </p>
+          ) : (
+            <p className="mt-2 text-sm text-gray-400 text-center">
+              {isDragging ? '✨ Drop your file here!' : '📁 Drag & drop a file here, or click to browse'}
+            </p>
           )}
         </div>
+        {/* --- END UPDATED --- */}
 
-        {/* Output Format & Convert Button */}
         <div className="grid grid-cols-2 gap-4 mt-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Output Format:</label>
@@ -203,9 +239,8 @@ function App() {
           </div>
         </div>
 
-        {/* Download Area */}
         {convertedFile && (
-          <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-xl flex justify-between items-center">
+          <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-xl flex justify-between items-center animate-fade-in">
             <span className="text-green-700 font-medium">✅ Conversion complete!</span>
             <button 
               onClick={handleDownload}
