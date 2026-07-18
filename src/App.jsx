@@ -13,80 +13,86 @@ import {
 function App() {
   // --- State ---
   const [files, setFiles] = useState([]);
-  const [conversionType, setConversionType] = useState('image');
   const [outputFormat, setOutputFormat] = useState('png');
   const [isConverting, setIsConverting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [overallProgress, setOverallProgress] = useState(0);
+  const [detectedType, setDetectedType] = useState(null); // 'image', 'pdf', 'docx', or null
 
-  // --- Configuration ---
-  const conversionConfigs = {
-    image: {
-      label: 'Image Converter',
-      formats: ['png', 'jpeg', 'webp', 'bmp'],
-      accept: 'image/*',
-      defaultFormat: 'png',
-      convert: convertImage,
-      getFileName: (originalName, format) => {
-        const base = originalName.replace(/\.[^.]+$/, '');
-        return `${base}.${format}`;
-      }
-    },
-    pdfToDocx: {
-      label: 'PDF → DOCX (Word)',
-      formats: ['docx'],
-      accept: '.pdf',
-      defaultFormat: 'docx',
-      convert: convertPdfToDocx,
-      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.docx')
-    },
-    pdfToXlsx: {
-      label: 'PDF → XLSX (Excel)',
-      formats: ['xlsx'],
-      accept: '.pdf',
-      defaultFormat: 'xlsx',
-      convert: convertPdfToXlsx,
-      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.xlsx')
-    },
-    pdfToPptx: {
-      label: 'PDF → PPTX (PowerPoint)',
-      formats: ['pptx'],
-      accept: '.pdf',
-      defaultFormat: 'pptx',
-      convert: convertPdfToPptx,
-      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.pptx')
-    },
-    pdfToTxt: {
-      label: 'PDF → TXT',
-      formats: ['txt'],
-      accept: '.pdf',
-      defaultFormat: 'txt',
-      convert: convertPdfToTxt,
-      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.txt')
-    },
-    pdfToHtml: {
-      label: 'PDF → HTML',
-      formats: ['html'],
-      accept: '.pdf',
-      defaultFormat: 'html',
-      convert: convertPdfToHtml,
-      getFileName: (originalName) => originalName.replace(/\.pdf$/i, '.html')
-    },
-    docxToPdf: {
-      label: 'DOCX → PDF',
-      formats: ['pdf'],
-      accept: '.docx',
-      defaultFormat: 'pdf',
-      convert: convertDocxToPdf,
-      getFileName: (originalName) => originalName.replace(/\.docx$/i, '.pdf')
+  // --- File Type Detection Logic ---
+  const detectFileType = (file) => {
+    // 1. Check MIME type
+    const type = file.type;
+    if (type.startsWith('image/')) return 'image';
+    if (type === 'application/pdf') return 'pdf';
+    if (type.includes('word') || type.includes('document')) return 'docx';
+
+    // 2. Fallback: Check file extension
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.pdf')) return 'pdf';
+    if (name.endsWith('.docx') || name.endsWith('.doc')) return 'docx';
+    if (name.match(/\.(png|jpg|jpeg|webp|bmp|gif|svg|tiff)$/)) return 'image';
+
+    // 3. Unknown
+    return null;
+  };
+
+  // --- Get available output formats based on detected type ---
+  const getAvailableFormats = (type) => {
+    switch (type) {
+      case 'image':
+        return ['png', 'jpeg', 'webp', 'bmp'];
+      case 'pdf':
+        return ['docx', 'xlsx', 'pptx', 'txt', 'html'];
+      case 'docx':
+        return ['pdf'];
+      default:
+        return [];
     }
   };
 
-  const currentConfig = conversionConfigs[conversionType];
+  // --- Get format display names ---
+  const getFormatDisplay = (format) => {
+    const map = {
+      png: 'PNG', jpeg: 'JPG', webp: 'WebP', bmp: 'BMP',
+      docx: 'DOCX (Word)', xlsx: 'XLSX (Excel)', pptx: 'PPTX (PowerPoint)',
+      txt: 'TXT', html: 'HTML', pdf: 'PDF'
+    };
+    return map[format] || format.toUpperCase();
+  };
+
+  // --- Get the convert function based on type + format ---
+  const getConvertFunction = (type, format) => {
+    if (type === 'image') return convertImage;
+    if (type === 'pdf') {
+      const map = {
+        docx: convertPdfToDocx,
+        xlsx: convertPdfToXlsx,
+        pptx: convertPdfToPptx,
+        txt: convertPdfToTxt,
+        html: convertPdfToHtml
+      };
+      return map[format] || convertPdfToDocx;
+    }
+    if (type === 'docx') return convertDocxToPdf;
+    return null;
+  };
+
+  // --- Get the type icon and label ---
+  const getTypeDisplay = (type) => {
+    switch (type) {
+      case 'image': return '🖼️ Image';
+      case 'pdf': return '📄 PDF';
+      case 'docx': return '📄 DOCX';
+      default: return '❓ Unknown';
+    }
+  };
 
   // --- File Management ---
   const addFiles = (newFiles) => {
     const fileArray = Array.from(newFiles);
+    
+    // Detect types for all files
     const newEntries = fileArray.map((file) => ({
       id: Date.now() + Math.random() + file.name,
       file: file,
@@ -95,19 +101,56 @@ function App() {
       status: 'pending',
       result: null,
       progress: 0,
-      message: 'Waiting...'
+      message: 'Waiting...',
+      fileType: detectFileType(file)
     }));
+
+    // Check for unsupported files
+    const unsupported = newEntries.filter(f => f.fileType === null);
+    if (unsupported.length > 0) {
+      const names = unsupported.map(f => f.name).join(', ');
+      alert(`❌ Unsupported file type(s): ${names}. Please upload only Images, PDFs, or DOCX files.`);
+      // Remove unsupported files from the list
+      const supportedEntries = newEntries.filter(f => f.fileType !== null);
+      if (supportedEntries.length === 0) return;
+      newEntries = supportedEntries;
+    }
+
+    // Batch validation: Check if all files are the same type
+    const allTypes = newEntries.map(f => f.fileType);
+    const allSame = allTypes.every(t => t === allTypes[0]);
+
+    if (!allSame && newEntries.length > 1) {
+      alert('⚠️ All files must be of the same type for batch conversion. Please upload only images, only PDFs, or only DOCX files together.');
+      return;
+    }
+
+    // If all are the same, set the detected type and default output format
+    if (allSame && newEntries.length > 0) {
+      const newType = allTypes[0];
+      setDetectedType(newType);
+      const formats = getAvailableFormats(newType);
+      if (formats.length > 0) setOutputFormat(formats[0]);
+    }
+
+    // Add files to the queue
     setFiles(prev => [...prev, ...newEntries]);
   };
 
   const removeFile = (id) => {
     if (isConverting) return;
-    setFiles(prev => prev.filter(f => f.id !== id));
+    setFiles(prev => {
+      const newFiles = prev.filter(f => f.id !== id);
+      // If no files left, reset detected type
+      if (newFiles.length === 0) setDetectedType(null);
+      return newFiles;
+    });
   };
 
   const clearAll = () => {
     if (isConverting) return;
     setFiles([]);
+    setDetectedType(null);
     setOverallProgress(0);
   };
 
@@ -130,16 +173,15 @@ function App() {
     e.target.value = '';
   };
 
-  // --- Update individual file progress (safe functional update) ---
+  // --- Update individual file progress ---
   const updateFileProgress = (id, progress, message, status = 'converting') => {
     setFiles(prev => prev.map(f => 
       f.id === id ? { ...f, progress, message, status } : f
     ));
   };
 
-  // --- FIXED: Bulletproof Batch Converter ---
+  // --- Batch Converter ---
   const handleBatchConvert = async () => {
-    // 1. Validation
     const pendingFiles = files.filter(f => f.status === 'pending');
     if (pendingFiles.length === 0) {
       alert('No pending files to convert.');
@@ -153,44 +195,39 @@ function App() {
     const totalFiles = pendingFiles.length;
     let completedCount = 0;
 
-    // 2. Process files ONE BY ONE using a simple for loop
     for (let i = 0; i < pendingFiles.length; i++) {
       const fileEntry = pendingFiles[i];
-      const { id, file } = fileEntry;
+      const { id, file, fileType } = fileEntry;
       
-      // Log to console so you can see progress
       console.log(`🔄 Processing ${i+1}/${totalFiles}: ${file.name}`);
 
-      // Mark as converting
+      const convertFunc = getConvertFunction(fileType, outputFormat);
+      if (!convertFunc) {
+        updateFileProgress(id, 0, 'Unsupported file type.', 'error');
+        console.error(`❌ Unsupported type for ${file.name}`);
+        continue;
+      }
+
       updateFileProgress(id, 0, 'Starting...', 'converting');
 
       try {
-        // Define progress callback (safely updates only this file)
         const onProgress = (percent, message) => {
-          // Update the specific file's progress
           setFiles(prev => prev.map(f => 
             f.id === id ? { ...f, progress: percent, message: message || 'Converting...', status: 'converting' } : f
           ));
         };
 
-        // Run the conversion
         let result;
-        if (conversionType === 'image') {
+        if (fileType === 'image') {
           result = await convertImage(file, outputFormat, onProgress);
         } else {
-          result = await currentConfig.convert(file, onProgress);
+          result = await convertFunc(file, onProgress);
         }
 
         // Generate output filename
-        let outputName;
-        if (conversionType === 'image') {
-          const base = file.name.replace(/\.[^.]+$/, '');
-          outputName = `${base}.${outputFormat}`;
-        } else {
-          outputName = currentConfig.getFileName(file.name);
-        }
+        const base = file.name.replace(/\.[^.]+$/, '');
+        const outputName = `${base}.${outputFormat}`;
 
-        // Mark as done
         setFiles(prev => prev.map(f =>
           f.id === id ? { ...f, status: 'done', result: { ...result, name: outputName }, progress: 100, message: 'Complete!' } : f
         ));
@@ -199,24 +236,21 @@ function App() {
         console.log(`✅ ${i+1}/${totalFiles} Done: ${file.name}`);
 
       } catch (error) {
-        // Mark as error
         setFiles(prev => prev.map(f =>
           f.id === id ? { ...f, status: 'error', message: 'Failed: ' + error.message, progress: 0 } : f
         ));
         console.error(`❌ ${i+1}/${totalFiles} Failed: ${file.name}`, error);
       }
 
-      // Update overall progress (based on completed count vs total)
       const overall = Math.round((completedCount / totalFiles) * 100);
       setOverallProgress(overall);
     }
 
-    // 3. All done
     setIsConverting(false);
     console.log('🎉 Batch processing complete!');
   };
 
-  // --- Download All (ZIP or Single) ---
+  // --- Download All ---
   const handleDownloadAll = async () => {
     const doneFiles = files.filter(f => f.status === 'done' && f.result);
     if (doneFiles.length === 0) {
@@ -252,15 +286,6 @@ function App() {
   };
 
   // --- Helpers ---
-  const getFormatDisplay = (format) => {
-    const map = {
-      png: 'PNG', jpeg: 'JPG', webp: 'WebP', bmp: 'BMP',
-      docx: 'DOCX', xlsx: 'XLSX', pptx: 'PPTX', txt: 'TXT',
-      html: 'HTML', pdf: 'PDF'
-    };
-    return map[format] || format.toUpperCase();
-  };
-
   const formatSize = (bytes) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -279,6 +304,14 @@ function App() {
 
   const doneCount = files.filter(f => f.status === 'done').length;
   const pendingCount = files.filter(f => f.status === 'pending').length;
+  const totalCount = files.length;
+
+  // Determine button text based on pending files count
+  const getButtonText = () => {
+    if (isConverting) return '⚡ Converting...';
+    if (pendingCount === 0) return '✅ All Converted';
+    return pendingCount > 1 ? '🚀 Convert All' : '🚀 Convert';
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col items-center justify-center p-4">
@@ -292,30 +325,7 @@ function App() {
           <p className="text-xs text-gray-400 mt-1">No sign-up required. Files never leave your device.</p>
         </div>
 
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Conversion Type:</label>
-          <select 
-            value={conversionType} 
-            onChange={(e) => {
-              setConversionType(e.target.value);
-              const config = conversionConfigs[e.target.value];
-              setOutputFormat(config.defaultFormat);
-              setFiles([]);
-              setOverallProgress(0);
-            }}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="image">🖼️ Image Converter (PNG, JPG, WebP, BMP)</option>
-            <option value="pdfToDocx">📄 PDF → DOCX (Word)</option>
-            <option value="pdfToXlsx">📊 PDF → XLSX (Excel)</option>
-            <option value="pdfToPptx">📽️ PDF → PPTX (PowerPoint)</option>
-            <option value="pdfToTxt">📝 PDF → TXT</option>
-            <option value="pdfToHtml">🌐 PDF → HTML</option>
-            <option value="docxToPdf">📄 DOCX → PDF</option>
-          </select>
-        </div>
-
-        {/* Drop Zone */}
+        {/* --- UPDATED: Drop Zone (No Conversion Type Selector) --- */}
         <div 
           className={`border-2 border-dashed rounded-xl p-6 transition-all duration-200 ease-in-out 
             ${isDragging 
@@ -330,21 +340,37 @@ function App() {
           <input 
             type="file" 
             onChange={handleFileInput} 
-            accept={currentConfig.accept}
+            accept="image/*,.pdf,.docx"
             multiple
             className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
           />
           <p className="mt-2 text-sm text-gray-400 text-center">
             {isDragging ? '✨ Drop your files here!' : '📁 Drag & drop files here, or click to browse (multiple allowed)'}
           </p>
+          <p className="mt-1 text-xs text-gray-400 text-center">
+            Supports: Images (JPG, PNG, WebP, BMP), PDF, DOCX
+          </p>
         </div>
+
+        {/* --- NEW: Detected File Type Badge --- */}
+        {detectedType && totalCount > 0 && (
+          <div className="mt-4 flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">Detected:</span>
+            <span className="bg-blue-100 text-blue-800 text-sm font-medium px-3 py-1 rounded-full">
+              {getTypeDisplay(detectedType)}
+            </span>
+            <span className="text-xs text-gray-400">
+              ({totalCount} file{totalCount > 1 ? 's' : ''})
+            </span>
+          </div>
+        )}
 
         {/* File Queue */}
         {files.length > 0 && (
-          <div className="mt-6">
+          <div className="mt-4">
             <div className="flex justify-between items-center mb-3">
               <h3 className="text-sm font-medium text-gray-700">
-                Files ({files.length}) 
+                File Queue ({totalCount}) 
                 {pendingCount > 0 && ` · ${pendingCount} pending`}
                 {doneCount > 0 && ` · ${doneCount} done`}
               </h3>
@@ -404,36 +430,38 @@ function App() {
           </div>
         )}
 
-        {/* Controls */}
-        <div className="grid grid-cols-2 gap-4 mt-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Output Format:</label>
-            {currentConfig.formats.length > 1 ? (
-              <select 
-                value={outputFormat} 
-                onChange={(e) => setOutputFormat(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+        {/* --- UPDATED: Output Format + Convert Button --- */}
+        {detectedType && totalCount > 0 && (
+          <div className="grid grid-cols-2 gap-4 mt-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Output Format:</label>
+              {getAvailableFormats(detectedType).length > 1 ? (
+                <select 
+                  value={outputFormat} 
+                  onChange={(e) => setOutputFormat(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                >
+                  {getAvailableFormats(detectedType).map((fmt) => (
+                    <option key={fmt} value={fmt}>{getFormatDisplay(fmt)}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-gray-100 text-gray-700">
+                  {getFormatDisplay(getAvailableFormats(detectedType)[0])} (Fixed)
+                </div>
+              )}
+            </div>
+            <div className="flex items-end">
+              <button 
+                onClick={handleBatchConvert}
+                disabled={isConverting || pendingCount === 0}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-md hover:shadow-lg"
               >
-                {currentConfig.formats.map((fmt) => (
-                  <option key={fmt} value={fmt}>{getFormatDisplay(fmt)}</option>
-                ))}
-              </select>
-            ) : (
-              <div className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-gray-100 text-gray-700">
-                {getFormatDisplay(currentConfig.formats[0])} (Fixed)
-              </div>
-            )}
+                {getButtonText()}
+              </button>
+            </div>
           </div>
-          <div className="flex items-end">
-            <button 
-              onClick={handleBatchConvert}
-              disabled={isConverting || files.length === 0 || pendingCount === 0}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded-lg transition-all shadow-md hover:shadow-lg"
-            >
-              {isConverting ? '⚡ Converting...' : '🚀 Convert All'}
-            </button>
-          </div>
-        </div>
+        )}
 
         {/* Overall Progress */}
         {isConverting && (
