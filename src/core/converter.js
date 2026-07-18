@@ -6,7 +6,7 @@
 import mammoth from 'mammoth';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
-// ---------- IMAGE CONVERTER (Existing) ----------
+// ---------- IMAGE CONVERTER ----------
 export const convertImage = (file, targetFormat) => {
   return new Promise((resolve, reject) => {
     if (!file.type.startsWith('image/')) {
@@ -40,7 +40,7 @@ export const convertImage = (file, targetFormat) => {
   });
 };
 
-// ---------- NEW: DOCX TO PDF CONVERTER ----------
+// ---------- DOCX TO PDF CONVERTER (FIXED) ----------
 export const convertDocxToPdf = (file) => {
   return new Promise((resolve, reject) => {
     // 1. Check if it's a Word file
@@ -64,24 +64,58 @@ export const convertDocxToPdf = (file) => {
 
         // 4. Create a new PDF using pdf-lib
         const pdfDoc = await PDFDocument.create();
-        const page = pdfDoc.addPage([600, 800]);
         const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
         const fontSize = 12;
-
-        // 5. Draw the text onto the PDF
         const margin = 50;
-        const maxWidth = page.getWidth() - margin * 2;
-        let y = page.getHeight() - margin;
+        
+        // 5. Split text into lines (handles \n, \r\n, and \r)
+        const lines = text.split(/\r?\n/);
+        
+        let currentPage = pdfDoc.addPage([600, 800]);
+        let y = currentPage.getHeight() - margin;
+        const maxWidth = currentPage.getWidth() - margin * 2;
 
-        const words = text.split(' ');
-        let line = '';
+        // 6. Draw each line
+        for (const rawLine of lines) {
+          // Skip empty lines (just add a blank line)
+          if (rawLine.trim() === '') {
+            y -= fontSize * 1.5;
+            continue;
+          }
 
-        for (const word of words) {
-          const testLine = line + word + ' ';
-          const width = font.widthOfTextAtSize(testLine, fontSize);
-          
-          if (width > maxWidth && line.length > 0) {
-            page.drawText(line.trim(), {
+          // Word wrap for long lines
+          const words = rawLine.split(' ');
+          let currentLine = '';
+
+          for (const word of words) {
+            const testLine = currentLine + word + ' ';
+            const width = font.widthOfTextAtSize(testLine, fontSize);
+            
+            if (width > maxWidth && currentLine.length > 0) {
+              // Draw the current line
+              currentPage.drawText(currentLine.trim(), {
+                x: margin,
+                y: y,
+                size: fontSize,
+                font: font,
+                color: rgb(0, 0, 0),
+              });
+              y -= fontSize * 1.5;
+              currentLine = word + ' ';
+              
+              // If we run out of space, add a new page
+              if (y < margin) {
+                currentPage = pdfDoc.addPage([600, 800]);
+                y = currentPage.getHeight() - margin;
+              }
+            } else {
+              currentLine = testLine;
+            }
+          }
+
+          // Draw the last line
+          if (currentLine.trim().length > 0) {
+            currentPage.drawText(currentLine.trim(), {
               x: margin,
               y: y,
               size: fontSize,
@@ -89,28 +123,19 @@ export const convertDocxToPdf = (file) => {
               color: rgb(0, 0, 0),
             });
             y -= fontSize * 1.5;
-            line = word + ' ';
-            
-            if (y < margin) {
-              const newPage = pdfDoc.addPage([600, 800]);
-              y = newPage.getHeight() - margin;
-            }
-          } else {
-            line = testLine;
+          }
+
+          // Add extra space after each paragraph
+          y -= fontSize * 0.5;
+
+          // If we run out of space, add a new page
+          if (y < margin) {
+            currentPage = pdfDoc.addPage([600, 800]);
+            y = currentPage.getHeight() - margin;
           }
         }
 
-        if (line.trim().length > 0) {
-          page.drawText(line.trim(), {
-            x: margin,
-            y: y,
-            size: fontSize,
-            font: font,
-            color: rgb(0, 0, 0),
-          });
-        }
-
-        // 6. Save the PDF
+        // 7. Save the PDF
         const pdfBytes = await pdfDoc.save();
         const blob = new Blob([pdfBytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
